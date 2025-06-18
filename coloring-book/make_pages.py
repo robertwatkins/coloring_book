@@ -47,11 +47,25 @@ depth_model = DPTForDepthEstimation.from_pretrained("Intel/dpt-hybrid-midas")
 depth_feature_extractor = DPTFeatureExtractor.from_pretrained("Intel/dpt-hybrid-midas")
 depth_model = depth_model.to(device)
 
+
+def get_depth_map(input_path):
+    image = Image.open(input_path).convert("RGB").resize((image_size, image_size))
+    pixel_values = depth_feature_extractor(images=image, return_tensors="pt").pixel_values.to(device)
+    with torch.no_grad():
+        outputs = depth_model(pixel_values)
+        depth = outputs.predicted_depth[0]
+        depth_min = depth.min()
+        depth_max = depth.max()
+        depth_normalized = (depth - depth_min) / (depth_max - depth_min)
+        depth_image = (depth_normalized * 255).cpu().numpy().astype(np.uint8)
+        depth_image = cv2.cvtColor(depth_image, cv2.COLOR_GRAY2RGB)
+        return Image.fromarray(depth_image)
+
 def get_edge_map(input_path):
     image = Image.open(input_path).convert("RGB").resize((image_size, image_size))
     image_np = np.array(image)
     gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-    edges = cv2.Canny(gray, 100, 200)
+    edges = cv2.Canny(gray, 0,20)
     edges = edges[:, :, None]
     edges = np.concatenate([edges] * 3, axis=2)
     return Image.fromarray(edges)
@@ -64,11 +78,17 @@ for filename in os.listdir(image_dir):
     if filename.lower().endswith(('.png', '.jpg', '.jpeg')) and output_suffix not in filename:
         input_path = os.path.join(image_dir, filename)
         base, _ = os.path.splitext(filename)
+        depth_path = os.path.join(image_dir, f"{base}{depth_suffix}.png")
         edge_path = os.path.join(image_dir, f"{base}{edge_suffix}.png")
         output_path = os.path.join(image_dir, f"{base}{output_suffix}.png")
 
         print(f"Processing: {filename}")
-        edge_image = get_edge_map(input_path)
+
+
+        depth_image = get_depth_map(input_path)
+        depth_image.save(depth_path)
+
+        edge_image = get_edge_map(depth_path)
         edge_image.save(edge_path)
 
             #image = Image.open(input_path).convert("RGB").resize((image_size, image_size))
@@ -87,6 +107,7 @@ for filename in os.listdir(image_dir):
         html_rows.append(f"""
         <tr>
             <td><img src="{filename}" width="256"></td>
+            <td><img src="{os.path.basename(depth_path)}" width="256"></td>
             <td><img src="{os.path.basename(edge_path)}" width="256"></td>
             <td><img src="{os.path.basename(output_path)}" width="256"></td>
         </tr>
@@ -110,7 +131,7 @@ with open(html_file, "w") as f:
     <body>
         <h1>Depth Map ControlNet Comparison</h1>
         <table>
-            <tr><th>Original</th><th>Edge Map</th><th>Generated</th></tr>
+            <tr><th>Original</th><th>Depth Map</th><th>Edge Map</th><th>Generated</th></tr>
             {''.join(html_rows)}
         </table>
     </body>
